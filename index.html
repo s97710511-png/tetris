@@ -488,3 +488,398 @@
     </script>
 </body>
 </html>
+const canvas = document.getElementById('board');
+const ctx = canvas.getContext('2d');
+const nextCanvas = document.getElementById('next-canvas');
+const nextCtx = nextCanvas.getContext('2d');
+
+// 게임 설정
+const ROWS = 20;
+const COLS = 10;
+const BLOCK_SIZE = 30; // 300px / 10 = 30px
+let board = Array.from({ length: ROWS }, () => Array(COLS).fill(0));
+let requestId;
+let lastTime = 0;
+let dropCounter = 0;
+let dropInterval = 1000; // 1초마다 하강
+let score = 0;
+let lines = 0;
+let level = 1;
+
+// 점수 및 레벨 업데이트
+const scoreElement = document.getElementById('score');
+const linesElement = document.getElementById('lines');
+const levelElement = document.getElementById('level');
+const playButton = document.getElementById('play-button');
+
+// 블록 정의 (Tetrominoes)
+// 블록 모양 배열 및 색상 (1번 인덱스부터 사용)
+const SHAPES = [
+    null, // 0번 인덱스는 빈 공간
+    [[0, 0, 0, 0], [1, 1, 1, 1], [0, 0, 0, 0], [0, 0, 0, 0]], // I
+    [[2, 2], [2, 2]], // O
+    [[0, 3, 0], [3, 3, 3], [0, 0, 0]], // T
+    [[4, 0, 0], [4, 4, 4], [0, 0, 0]], // L
+    [[0, 0, 5], [5, 5, 5], [0, 0, 0]], // J
+    [[0, 6, 6], [6, 6, 0], [0, 0, 0]], // S
+    [[7, 7, 0], [0, 7, 7], [0, 0, 0]]  // Z
+];
+
+const COLORS = [
+    '#000',      // 0: 배경
+    '#00f0f0',   // 1: I (Cyan)
+    '#f0f000',   // 2: O (Yellow)
+    '#a000f0',   // 3: T (Purple)
+    '#f0a000',   // 4: L (Orange)
+    '#0000f0',   // 5: J (Blue)
+    '#00f000',   // 6: S (Green)
+    '#f00000',   // 7: Z (Red)
+    '#fff'       // 8: 클리어 효과 (White) <<< 추가된 색상
+];
+
+// 현재 움직이는 블록 상태
+let piece = {
+    shape: [],
+    x: 0,
+    y: 0,
+    colorIndex: 0
+};
+let nextPiece = newPiece(); // 다음에 나올 블록
+
+/**
+ * 새로운 블록을 생성하고 다음 블록을 현재 블록으로 설정
+ */
+function newPiece() {
+    // 1부터 7까지 랜덤 블록 인덱스
+    const randIndex = Math.floor(Math.random() * 7) + 1;
+    const newShape = SHAPES[randIndex];
+    const newPieceState = {
+        shape: newShape,
+        x: Math.floor(COLS / 2) - Math.floor(newShape[0].length / 2),
+        y: 0,
+        colorIndex: randIndex
+    };
+    return newPieceState;
+}
+
+/**
+ * 현재 블록을 다음 블록으로 교체하고 새 다음 블록 생성
+ */
+function spawnPiece() {
+    piece = nextPiece;
+    nextPiece = newPiece();
+    
+    // 초기 위치에 블록을 놓을 수 없으면 게임 오버
+    if (checkCollision(board, piece)) {
+        cancelAnimationFrame(requestId);
+        alert('Game Over! Your Score: ' + score);
+        board = Array.from({ length: ROWS }, () => Array(COLS).fill(0)); // 보드 초기화
+        score = 0;
+        lines = 0;
+        level = 1;
+        dropInterval = 1000;
+        updateScore();
+    }
+    drawNextPiece();
+}
+
+/**
+ * 캔버스에 사각형 블록을 그림
+ */
+function drawBlock(x, y, colorIndex, context, offsetX = 0, offsetY = 0) {
+    if (colorIndex === 0) return;
+    context.fillStyle = COLORS[colorIndex];
+    context.fillRect(
+        x * BLOCK_SIZE + offsetX, 
+        y * BLOCK_SIZE + offsetY, 
+        BLOCK_SIZE, 
+        BLOCK_SIZE
+    );
+    // 블록 테두리
+    context.strokeStyle = '#2c3e50'; 
+    context.strokeRect(
+        x * BLOCK_SIZE + offsetX, 
+        y * BLOCK_SIZE + offsetY, 
+        BLOCK_SIZE, 
+        BLOCK_SIZE
+    );
+}
+
+/**
+ * 보드와 현재 블록을 그림
+ */
+function draw() {
+    // 1. 보드 전체 지우기
+    ctx.fillStyle = '#2c3e50';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // 2. 보드에 고정된 블록 그리기
+    for (let y = 0; y < ROWS; y++) {
+        for (let x = 0; x < COLS; x++) {
+            drawBlock(x, y, board[y][x], ctx);
+        }
+    }
+
+    // 3. 현재 움직이는 블록 그리기
+    for (let y = 0; y < piece.shape.length; y++) {
+        for (let x = 0; x < piece.shape[y].length; x++) {
+            if (piece.shape[y][x]) {
+                drawBlock(piece.x + x, piece.y + y, piece.colorIndex, ctx);
+            }
+        }
+    }
+}
+
+/**
+ * 다음 블록을 그리는 함수
+ */
+function drawNextPiece() {
+    nextCtx.clearRect(0, 0, nextCanvas.width, nextCanvas.height);
+    const shape = nextPiece.shape;
+    const size = shape.length;
+    
+    // 캔버스 중앙에 블록을 그리기 위한 오프셋 계산
+    const startX = (nextCanvas.width - size * BLOCK_SIZE) / 2;
+    const startY = (nextCanvas.height - size * BLOCK_SIZE) / 2;
+
+    for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+            if (shape[y][x]) {
+                drawBlock(x, y, nextPiece.colorIndex, nextCtx, startX, startY);
+            }
+        }
+    }
+}
+
+/**
+ * 블록과 보드 간의 충돌 검사
+ */
+function checkCollision(currentBoard, currentPiece) {
+    for (let y = 0; y < currentPiece.shape.length; y++) {
+        for (let x = 0; x < currentPiece.shape[y].length; x++) {
+            if (currentPiece.shape[y][x]) {
+                const newX = currentPiece.x + x;
+                const newY = currentPiece.y + y;
+
+                // 1. 보드 경계를 벗어남 (좌우, 아래)
+                if (newX < 0 || newX >= COLS || newY >= ROWS) {
+                    return true;
+                }
+                // 2. 이미 채워진 보드 셀과 충돌
+                if (newY >= 0 && currentBoard[newY][newX] !== 0) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+/**
+ * 현재 블록을 보드에 병합(고정)시킴
+ */
+function mergePiece() {
+    for (let y = 0; y < piece.shape.length; y++) {
+        for (let x = 0; x < piece.shape[y].length; x++) {
+            if (piece.shape[y][x]) {
+                board[piece.y + y][piece.x + x] = piece.colorIndex;
+            }
+        }
+    }
+}
+
+/**
+ * [추가된 헬퍼 함수] 지정된 시간(ms)만큼 대기합니다.
+ */
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * 가득 찬 줄을 제거하고 점수를 업데이트 (색상 깜박임 효과 포함)
+ */
+async function removeLines() {
+    let linesToClear = [];
+
+    // 1. 클리어할 줄 인덱스 수집
+    for (let y = ROWS - 1; y >= 0; y--) {
+        if (board[y].every(cell => cell !== 0)) {
+            linesToClear.push(y);
+        }
+    }
+
+    if (linesToClear.length > 0) {
+        // 2. 클리어 효과 (색상 변경 및 지연)
+        // 블록을 흰색(8번 인덱스)으로 변경하여 깜박이는 것처럼 보이게 함
+        for (const y of linesToClear) {
+            board[y].fill(8); 
+        }
+        draw(); // 변경된 색상을 즉시 렌더링
+        await sleep(100); // 100ms 대기 (깜박이는 시간)
+
+        // 3. 실제 줄 제거 실행 및 점수 업데이트
+        
+        let linesCleared = linesToClear.length;
+        
+        // 보드에서 줄 제거 로직
+        // 인덱스가 낮은(위쪽) 줄부터 제거해야 인덱스가 꼬이지 않으므로 reverse() 사용
+        for (const y of linesToClear.reverse()) { 
+            board.splice(y, 1);
+            board.unshift(Array(COLS).fill(0));
+        }
+
+        // 점수 계산 및 레벨업 (기존 로직 유지)
+        const points = [0, 40, 100, 300, 1200];
+        score += points[linesCleared] * level;
+        lines += linesCleared;
+        
+        const newLevel = Math.floor(lines / 10) + 1;
+        if (newLevel > level) {
+            level = newLevel;
+            dropInterval = Math.max(100, 1000 - (level - 1) * 70);
+        }
+
+        updateScore();
+        draw(); // 최종 보드 상태 렌더링
+    }
+}
+
+
+/**
+ * 블록 이동 및 회전 함수
+ */
+function movePiece(dir, dy = 0, rotate = false) {
+    let nextPieceState = { ...piece };
+    
+    if (rotate) {
+        // 회전: 90도 시계 방향 회전
+        const N = piece.shape.length;
+        let newShape = Array.from({ length: N }, () => Array(N).fill(0));
+
+        for (let y = 0; y < N; y++) {
+            for (let x = 0; x < N; x++) {
+                newShape[x][N - 1 - y] = piece.shape[y][x];
+            }
+        }
+        nextPieceState.shape = newShape;
+
+        // Wall Kick (벽차기) - 간단한 구현
+        for (let offset = 0; offset < N; offset++) {
+            nextPieceState.x = piece.x + offset;
+            if (!checkCollision(board, nextPieceState)) {
+                piece = nextPieceState;
+                draw();
+                return;
+            }
+            nextPieceState.x = piece.x - offset;
+            if (!checkCollision(board, nextPieceState)) {
+                piece = nextPieceState;
+                draw();
+                return;
+            }
+            nextPieceState.x = piece.x; // 원위치
+        }
+        // 회전 실패
+        return;
+
+    } else {
+        // 이동
+        nextPieceState.x += dir;
+        nextPieceState.y += dy;
+    }
+
+    if (!checkCollision(board, nextPieceState)) {
+        piece = nextPieceState;
+    } else if (dy !== 0) {
+        // 아래로 이동 중 충돌 발생 = 착지
+        mergePiece();
+        removeLines(); // 비동기 함수 호출 (await 사용하지 않아 게임 흐름 유지)
+        spawnPiece();
+    }
+    draw();
+}
+
+/**
+ * 게임 루프 (Drop)
+ */
+function drop(time = 0) {
+    const deltaTime = time - lastTime;
+    lastTime = time;
+
+    dropCounter += deltaTime;
+    if (dropCounter > dropInterval) {
+        movePiece(0, 1); // 블록 하강
+        dropCounter = 0;
+    }
+
+    draw();
+    requestId = requestAnimationFrame(drop);
+}
+
+/**
+ * 사용자 입력 처리
+ */
+document.addEventListener('keydown', event => {
+    if (!requestId) return; // 게임 일시 정지 상태에서는 작동하지 않음
+
+    switch (event.key) {
+        case 'ArrowLeft':
+            movePiece(-1, 0); // 왼쪽 이동
+            break;
+        case 'ArrowRight':
+            movePiece(1, 0); // 오른쪽 이동
+            break;
+        case 'ArrowDown':
+            // 소프트 드롭
+            movePiece(0, 1);
+            dropCounter = 0; // 빠른 하강 후 드롭 카운터 초기화
+            break;
+        case 'ArrowUp':
+        case 'x':
+            movePiece(0, 0, true); // 회전
+            break;
+        case ' ':
+            // 하드 드롭 (즉시 바닥으로 이동)
+            while (!checkCollision(board, { ...piece, y: piece.y + 1 })) {
+                piece.y++;
+            }
+            movePiece(0, 1); // 최종 착지 및 병합
+            break;
+    }
+});
+
+/**
+ * 점수/라인/레벨 표시 업데이트
+ */
+function updateScore() {
+    scoreElement.innerText = score;
+    linesElement.innerText = lines;
+    levelElement.innerText = level;
+}
+
+/**
+ * 게임 시작/일시 정지 토글
+ */
+function play() {
+    if (requestId) {
+        // 게임 일시 정지
+        cancelAnimationFrame(requestId);
+        requestId = null;
+        playButton.innerText = 'Resume';
+    } else {
+        // 게임 시작 또는 재개
+        // 게임 재개 시 현재 piece가 없으면 새로 생성
+        if (!piece.shape || piece.shape.length === 0) {
+             spawnPiece();
+        }
+        requestId = requestAnimationFrame(drop);
+        playButton.innerText = 'Pause';
+    }
+}
+
+// 초기 시작 버튼 이벤트 리스너 설정
+playButton.addEventListener('click', play);
+
+// 초기 점수 및 다음 블록 표시
+updateScore();
+drawNextPiece();
